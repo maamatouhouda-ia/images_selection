@@ -92,15 +92,16 @@ def scan_images_directory(root_dir):
     return images_data
 
 def initialize_session(images_data):
-    """Initialise les réponses pour toutes les images"""
+    """Initialise les réponses pour toutes les images - SANS label par défaut"""
     if "responses" not in st.session_state:
         st.session_state.responses = {}
     
     for i, img_data in enumerate(images_data):
         if i not in st.session_state.responses:
             st.session_state.responses[i] = {
-                "label_choisi": img_data["label_initial"],
-                "commentaire": ""
+                "label_choisi": None,  # Changé de label_initial à None
+                "commentaire": "",
+                "annotated": False  # Nouveau flag pour tracker l'annotation
             }
 
 def get_save_filepath(annotator_name):
@@ -188,7 +189,8 @@ def export_to_csv(images_data):
             "dossier_source": img_data["folder"],
             "label_initial": img_data["label_initial"],
             "label_choisi": response.get("label_choisi", ""),
-            "commentaire": response.get("commentaire", "")
+            "commentaire": response.get("commentaire", ""),
+            "annotated": response.get("annotated", False)
         })
     
     df = pd.DataFrame(results)
@@ -202,7 +204,7 @@ def send_completion_email(annotator_name, images_data, csv_content):
         msg['To'] = SMTP_CONFIG["receiver"]
         msg['Subject'] = f"✅ Annotation terminée - {annotator_name} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         
-        completed = sum(1 for r in st.session_state.responses.values() if r.get("label_choisi"))
+        completed = sum(1 for r in st.session_state.responses.values() if r.get("annotated", False))
         
         body = f"""
 Bonjour,
@@ -253,6 +255,10 @@ def reset_session():
     st.session_state.started = False
     st.session_state.responses = {}
     st.session_state.images_data = []
+
+def count_completed_annotations():
+    """Compte le nombre d'annotations réellement effectuées"""
+    return sum(1 for r in st.session_state.responses.values() if r.get("annotated", False))
 
 # ==================== INITIALISATION ====================
 
@@ -308,6 +314,10 @@ st.markdown("""
     background-color: #e8f5e9;
     color: #2e7d32;
 }
+.badge-pending {
+    background-color: #fff3e0;
+    color: #e65100;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -322,7 +332,7 @@ if not st.session_state.started:
     st.markdown("""
     ### Bienvenue dans l'outil de sélection d'images
     
-    Cet outil vous permet de sélectionner la classe de l’imagette présentant la fissure en se basant sur le contexte, grâce à l’affichage de l’image originale avec le rectangle englobant la fissure.
+    Cet outil vous permet de sélectionner la classe de l'imagette présentant la fissure en se basant sur le contexte, grâce à l'affichage de l'image originale avec le rectangle englobant la fissure.
     
     **Fonctionnalités:**
     - ✅ Affichage côte à côte des images bbox et crop
@@ -344,35 +354,54 @@ if not st.session_state.started:
             key="root_dir_input"
         )
         
+        # Aide pour le chemin
+        if st.checkbox("📂 Aide : afficher le répertoire actuel"):
+            st.code(f"Répertoire actuel : {os.getcwd()}")
+            st.info("💡 Le chemin peut être absolu (ex: /home/user/dataset) ou relatif (ex: ./dataset)")
+        
         if st.button("🚀 Démarrer l'annotation", type="primary", key="start_new"):
             if not name.strip():
                 st.error("⚠️ Veuillez entrer votre nom")
             elif not root_dir.strip():
                 st.error("⚠️ Veuillez spécifier le dossier principal")
-            elif not os.path.exists(root_dir.strip()):
-                st.error(f"⚠️ Le dossier '{root_dir.strip()}' n'existe pas")
             else:
-                # Vérifier si une sauvegarde existe
-                save_data, msg = load_progress(name.strip())
-                if save_data:
-                    st.warning(f"⚠️ Une sauvegarde existe pour '{name.strip()}' ({save_data.get('current_index', 0)}/{save_data.get('total_images', 0)} images)")
-                    st.info("💡 Utilisez l'onglet 'Reprendre une session' ou choisissez un autre nom")
+                # Nettoyer le chemin : supprimer espaces parasites
+                clean_path = root_dir.strip().replace(' /', '/').replace('/ ', '/')
+                
+                if not os.path.exists(clean_path):
+                    st.error(f"⚠️ Le dossier '{clean_path}' n'existe pas")
+                    st.info(f"💡 Vérifiez que le chemin est correct")
                 else:
-                    # Scanner les images
-                    with st.spinner("🔍 Analyse du dossier en cours..."):
-                        images_data = scan_images_directory(root_dir.strip())
-                    
-                    if not images_data:
-                        st.error("❌ Aucune paire d'images bbox/crop trouvée dans ce dossier")
+                    # Vérifier si une sauvegarde existe
+                    save_data, msg = load_progress(name.strip())
+                    if save_data:
+                        st.warning(f"⚠️ Une sauvegarde existe pour '{name.strip()}' ({save_data.get('current_index', 0)}/{save_data.get('total_images', 0)} images)")
+                        st.info("💡 Utilisez l'onglet 'Reprendre une session' ou choisissez un autre nom")
                     else:
-                        st.session_state.annotator_name = name.strip()
-                        st.session_state.root_directory = root_dir.strip()
-                        st.session_state.images_data = images_data
-                        st.session_state.current_index = 0
-                        initialize_session(images_data)
-                        st.session_state.started = True
-                        st.success(f"✅ {len(images_data)} paires d'images trouvées!")
-                        st.rerun()
+                        # Scanner les images
+                        with st.spinner("🔍 Analyse du dossier en cours..."):
+                            images_data = scan_images_directory(clean_path)
+                        
+                        if not images_data:
+                            st.error("❌ Aucune paire d'images bbox/crop trouvée dans ce dossier")
+                            st.info("💡 Vérifiez que vos images se terminent par '_bbox' et '_crop'")
+                        else:
+                            st.session_state.annotator_name = name.strip()
+                            st.session_state.root_directory = clean_path
+                            st.session_state.images_data = images_data
+                            st.session_state.current_index = 0
+                            initialize_session(images_data)
+                            st.session_state.started = True
+                            
+                            # Afficher les sous-dossiers trouvés
+                            folders = list(set(img["folder"] for img in images_data))
+                            st.success(f"✅ {len(images_data)} paires d'images trouvées dans {len(folders)} sous-dossiers!")
+                            with st.expander("📁 Sous-dossiers détectés"):
+                                for folder in sorted(folders):
+                                    count = sum(1 for img in images_data if img["folder"] == folder)
+                                    st.write(f"- {folder}: {count} paires")
+                            
+                            st.rerun()
     
     with tab2:
         st.markdown("#### Reprendre une session sauvegardée")
@@ -425,7 +454,7 @@ else:
         st.markdown(f"**👤 Annotateur:** {st.session_state.annotator_name}")
         st.markdown(f"**📊 Progression:** {idx}/{len(images_data)}")
         
-        if st.button("💾 Sauvegarder maintenant", width='stretch'):
+        if st.button("💾 Sauvegarder maintenant", use_container_width=True):
             success, msg = save_progress(images_data)
             if success:
                 st.success(msg)
@@ -440,7 +469,7 @@ else:
         )
         st.session_state.auto_save_enabled = auto_save
         
-        if st.button("🏠 Retour à l'accueil", width='stretch'):
+        if st.button("🏠 Retour à l'accueil", use_container_width=True):
             if st.session_state.auto_save_enabled:
                 save_progress(images_data)
             reset_session()
@@ -448,9 +477,25 @@ else:
         
         st.markdown("---")
         st.markdown("### 📈 Statistiques")
-        completed = sum(1 for r in st.session_state.responses.values() if r.get("label_choisi"))
-        st.metric("Complétées", f"{completed}/{len(images_data)}")
-        st.progress(completed / len(images_data))
+        completed = count_completed_annotations()
+        st.metric("Annotées", f"{completed}/{len(images_data)}")
+        progress_pct = completed / len(images_data) if len(images_data) > 0 else 0
+        st.progress(progress_pct)
+        
+        # Statistiques par sous-dossier
+        with st.expander("📁 Par sous-dossier"):
+            folders = {}
+            for i, img in enumerate(images_data):
+                folder = img["folder"]
+                if folder not in folders:
+                    folders[folder] = {"total": 0, "annotated": 0}
+                folders[folder]["total"] += 1
+                if st.session_state.responses[i].get("annotated", False):
+                    folders[folder]["annotated"] += 1
+            
+            for folder in sorted(folders.keys()):
+                stats = folders[folder]
+                st.write(f"**{folder}:** {stats['annotated']}/{stats['total']}")
     
     # Vérifier si terminé
     if idx >= len(images_data):
@@ -487,11 +532,12 @@ else:
                     "Image": img["bbox_file"],
                     "Dossier": img["folder"],
                     "Label initial": img["label_initial"],
-                    "Label choisi": st.session_state.responses[i]["label_choisi"]
+                    "Label choisi": st.session_state.responses[i]["label_choisi"] or "Non annoté",
+                    "Annoté": "✅" if st.session_state.responses[i].get("annotated", False) else "⏳"
                 }
                 for i, img in enumerate(images_data)
             ])
-            st.dataframe(df, width='stretch')
+            st.dataframe(df, use_container_width=True)
         
         # Téléchargement
         st.download_button(
@@ -499,10 +545,10 @@ else:
             data=csv_content,
             file_name=f"annotations_{st.session_state.annotator_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv",
-            width='stretch'
+            use_container_width=True
         )
         
-        if st.button("🔄 Nouvelle annotation", width='stretch'):
+        if st.button("🔄 Nouvelle annotation", use_container_width=True):
             reset_session()
             st.rerun()
     
@@ -513,11 +559,17 @@ else:
         st.progress(idx / len(images_data))
         st.markdown(f"### Image {idx + 1} / {len(images_data)}")
         
+        # Statut de l'annotation actuelle
+        is_annotated = st.session_state.responses[idx].get("annotated", False)
+        status_badge = "✅ Annotée" if is_annotated else "⏳ Non annotée"
+        status_class = "badge-selected" if is_annotated else "badge-pending"
+        
         # Badge du dossier source
         st.markdown(f"""
         <div>
             <span class='badge-label badge-initial'>📁 Dossier: {img_data['folder']}</span>
             <span class='badge-label badge-initial'>🏷️ Label initial: {img_data['label_initial']}</span>
+            <span class='badge-label {status_class}'>{status_badge}</span>
         </div>
         """, unsafe_allow_html=True)
         
@@ -533,7 +585,7 @@ else:
             
             if os.path.exists(img_data["bbox_path"]):
                 img_bbox = Image.open(img_data["bbox_path"])
-                st.image(img_bbox, width='stretch')
+                st.image(img_bbox, use_container_width=True)
                 st.caption(f"📄 {img_data['bbox_file']}")
             else:
                 st.error("❌ Image bbox non trouvée")
@@ -545,7 +597,7 @@ else:
             
             if os.path.exists(img_data["crop_path"]):
                 img_crop = Image.open(img_data["crop_path"])
-                st.image(img_crop, width='content')
+                st.image(img_crop, use_container_width=False)
                 st.caption(f"📄 {img_data['crop_file']}")
             else:
                 st.error("❌ Image crop non trouvée")
@@ -556,7 +608,12 @@ else:
         st.markdown("### ✏️ Annotation")
         
         current_choice = st.session_state.responses[idx]["label_choisi"]
-        default_index = CLASSES_DISPONIBLES.index(current_choice) if current_choice in CLASSES_DISPONIBLES else 0
+        
+        # Si pas encore de choix, utiliser le label initial comme suggestion
+        if current_choice is None:
+            default_index = CLASSES_DISPONIBLES.index(img_data["label_initial"]) if img_data["label_initial"] in CLASSES_DISPONIBLES else 0
+        else:
+            default_index = CLASSES_DISPONIBLES.index(current_choice) if current_choice in CLASSES_DISPONIBLES else 0
         
         choice = st.radio(
             "🏷️ Sélectionnez le label approprié:",
@@ -566,7 +623,10 @@ else:
             horizontal=True
         )
         
-        st.session_state.responses[idx]["label_choisi"] = choice
+        # Marquer comme annoté si l'utilisateur change le choix
+        if choice != current_choice:
+            st.session_state.responses[idx]["label_choisi"] = choice
+            st.session_state.responses[idx]["annotated"] = True
         
         comment = st.text_area(
             "💬 Commentaire (optionnel):",
@@ -584,13 +644,19 @@ else:
         col1, col2, col3 = st.columns([1, 2, 1])
         
         with col1:
-            if st.button("⬅️ Précédent", disabled=(idx == 0), width='stretch'):
+            if st.button("⬅️ Précédent", disabled=(idx == 0), use_container_width=True):
                 st.session_state.current_index -= 1
                 st.rerun()
         
         with col3:
             button_label = "Suivant ➡️" if idx < len(images_data) - 1 else "✅ Terminer"
-            if st.button(button_label, type="primary", width='stretch'):
+            if st.button(button_label, type="primary", use_container_width=True):
+                # Marquer comme annoté si pas déjà fait
+                if not st.session_state.responses[idx].get("annotated", False):
+                    st.session_state.responses[idx]["annotated"] = True
+                    if st.session_state.responses[idx]["label_choisi"] is None:
+                        st.session_state.responses[idx]["label_choisi"] = choice
+                
                 st.session_state.current_index += 1
                 
                 # Sauvegarde automatique
