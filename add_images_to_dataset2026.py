@@ -401,6 +401,8 @@ if not st.session_state.started:
                                     count = sum(1 for img in images_data if img["folder"] == folder)
                                     st.write(f"- {folder}: {count} paires")
                             
+                            st.info("💡 Si vous ajoutez des images pendant l'annotation, utilisez le bouton '🔄 Recharger les images' dans la sidebar")
+                            
                             st.rerun()
     
     with tab2:
@@ -460,6 +462,45 @@ else:
                 st.success(msg)
             else:
                 st.error(msg)
+        
+        st.markdown("---")
+        
+        # Bouton pour recharger les images
+        if st.button("🔄 Recharger les images du dossier", use_container_width=True):
+            with st.spinner("🔍 Rechargement en cours..."):
+                # Sauvegarder d'abord
+                save_progress(images_data)
+                
+                # Recharger les images
+                new_images_data = scan_images_directory(st.session_state.root_directory)
+                
+                if new_images_data:
+                    old_count = len(images_data)
+                    new_count = len(new_images_data)
+                    
+                    # Mettre à jour la liste des images
+                    st.session_state.images_data = new_images_data
+                    
+                    # Initialiser les réponses pour les nouvelles images
+                    for i, img_data in enumerate(new_images_data):
+                        if i not in st.session_state.responses:
+                            st.session_state.responses[i] = {
+                                "label_choisi": None,
+                                "commentaire": "",
+                                "annotated": False
+                            }
+                    
+                    diff = new_count - old_count
+                    if diff > 0:
+                        st.success(f"✅ {diff} nouvelles images détectées! Total: {new_count}")
+                    elif diff < 0:
+                        st.warning(f"⚠️ {abs(diff)} images supprimées. Total: {new_count}")
+                    else:
+                        st.info(f"ℹ️ Aucun changement. Total: {new_count}")
+                    
+                    st.rerun()
+                else:
+                    st.error("❌ Aucune image trouvée")
         
         st.markdown("---")
         
@@ -597,7 +638,7 @@ else:
             
             if os.path.exists(img_data["crop_path"]):
                 img_crop = Image.open(img_data["crop_path"])
-                st.image(img_crop, use_container_width=False)
+                st.image(img_crop, use_container_width=True)
                 st.caption(f"📄 {img_data['crop_file']}")
             else:
                 st.error("❌ Image crop non trouvée")
