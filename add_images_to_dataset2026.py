@@ -647,7 +647,7 @@ else:
                 img_crop = Image.open(img_data["crop_path"])
                 
                 # Afficher l'image normalement
-                st.image(img_crop, use_container_width=True)
+                st.image(img_crop, use_container_width=False)
                 st.caption(f"📄 {img_data['crop_file']}")
 
                 zoom_key = f"zoom_{idx}"
