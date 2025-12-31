@@ -35,6 +35,13 @@ SMTP_CONFIG = {
 
 # ==================== FONCTIONS UTILITAIRES ====================
 
+def image_to_base64(image):
+    """Convertit une image PIL en base64 pour l'affichage HTML"""
+    buffered = BytesIO()
+    image.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode()
+    return f"data:image/png;base64,{img_str}"
+
 def scan_images_directory(root_dir):
     """
     Scanne le dossier racine et récupère toutes les paires d'images bbox/crop
