@@ -651,6 +651,12 @@ else:
                 st.caption(f"📄 {img_data['crop_file']}")
 
                 zoom_key = f"zoom_{idx}"
+                # Initialisation du state si nécessaire
+                if "show_crop_zoom" not in st.session_state:
+                    st.session_state.show_crop_zoom = {}
+                
+                if zoom_key not in st.session_state.show_crop_zoom:
+                    st.session_state.show_crop_zoom[zoom_key] = False
                 
                 # Bouton pour zoomer avec colonnes pour centrer
                 col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
@@ -660,7 +666,8 @@ else:
                         st.rerun()
                 
                 # Afficher le modal de zoom si activé
-                if st.session_state.get("show_crop_zoom", {}).get(zoom_key, False):
+                #if st.session_state.get("show_crop_zoom", {}).get(zoom_key, False):
+                if st.session_state.show_crop_zoom[zoom_key]:
                     # Créer un dialog/modal avec st.dialog (Streamlit 1.31+) ou container
                     with st.container():
                         # Overlay sombre en arrière-plan
