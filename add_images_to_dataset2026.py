@@ -658,7 +658,7 @@ else:
                         st.rerun()
                 
                 # Afficher le modal de zoom si activé
-                if st.session_state.show_crop_zoom.get(zoom_key, False):
+                if st.session_state.get("show_crop_zoom", {}).get(zoom_key, False):
                     # Créer un dialog/modal avec st.dialog (Streamlit 1.31+) ou container
                     with st.container():
                         # Overlay sombre en arrière-plan
