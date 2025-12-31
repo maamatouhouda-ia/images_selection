@@ -649,6 +649,8 @@ else:
                 # Afficher l'image normalement
                 st.image(img_crop, use_container_width=True)
                 st.caption(f"📄 {img_data['crop_file']}")
+
+                zoom_key = f"zoom_{idx}"
                 
                 # Bouton pour zoomer avec colonnes pour centrer
                 col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
