@@ -643,6 +643,10 @@ else:
                 st.image(img_crop, use_container_width=True)
                 st.caption(f"📄 {img_data['crop_file']}")
                 
+                # Initialiser le dictionnaire de zoom si nécessaire
+                if "show_crop_zoom" not in st.session_state:
+                    st.session_state.show_crop_zoom = {}
+                
                 # Bouton pour zoomer
                 zoom_key = f"zoom_{idx}"
                 if zoom_key not in st.session_state.show_crop_zoom:
