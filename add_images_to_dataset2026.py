@@ -35,6 +35,13 @@ SMTP_CONFIG = {
 
 # ==================== FONCTIONS UTILITAIRES ====================
 
+def image_to_base64(image):
+    """Convertit une image PIL en base64 pour l'affichage HTML"""
+    buffered = BytesIO()
+    image.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode()
+    return f"data:image/png;base64,{img_str}"
+
 def scan_images_directory(root_dir):
     """
     Scanne le dossier racine et récupère toutes les paires d'images bbox/crop
@@ -401,6 +408,8 @@ if not st.session_state.started:
                                     count = sum(1 for img in images_data if img["folder"] == folder)
                                     st.write(f"- {folder}: {count} paires")
                             
+                            st.info("💡 Si vous ajoutez des images pendant l'annotation, utilisez le bouton '🔄 Recharger les images' dans la sidebar")
+                            
                             st.rerun()
     
     with tab2:
@@ -460,6 +469,45 @@ else:
                 st.success(msg)
             else:
                 st.error(msg)
+        
+        st.markdown("---")
+        
+        # Bouton pour recharger les images
+        if st.button("🔄 Recharger les images du dossier", use_container_width=True):
+            with st.spinner("🔍 Rechargement en cours..."):
+                # Sauvegarder d'abord
+                save_progress(images_data)
+                
+                # Recharger les images
+                new_images_data = scan_images_directory(st.session_state.root_directory)
+                
+                if new_images_data:
+                    old_count = len(images_data)
+                    new_count = len(new_images_data)
+                    
+                    # Mettre à jour la liste des images
+                    st.session_state.images_data = new_images_data
+                    
+                    # Initialiser les réponses pour les nouvelles images
+                    for i, img_data in enumerate(new_images_data):
+                        if i not in st.session_state.responses:
+                            st.session_state.responses[i] = {
+                                "label_choisi": None,
+                                "commentaire": "",
+                                "annotated": False
+                            }
+                    
+                    diff = new_count - old_count
+                    if diff > 0:
+                        st.success(f"✅ {diff} nouvelles images détectées! Total: {new_count}")
+                    elif diff < 0:
+                        st.warning(f"⚠️ {abs(diff)} images supprimées. Total: {new_count}")
+                    else:
+                        st.info(f"ℹ️ Aucun changement. Total: {new_count}")
+                    
+                    st.rerun()
+                else:
+                    st.error("❌ Aucune image trouvée")
         
         st.markdown("---")
         
@@ -597,8 +645,51 @@ else:
             
             if os.path.exists(img_data["crop_path"]):
                 img_crop = Image.open(img_data["crop_path"])
+                
+                # Afficher l'image normalement
                 st.image(img_crop, use_container_width=False)
                 st.caption(f"📄 {img_data['crop_file']}")
+
+                zoom_key = f"zoom_{idx}"
+                # Initialisation du state si nécessaire
+                if "show_crop_zoom" not in st.session_state:
+                    st.session_state.show_crop_zoom = {}
+                
+                if zoom_key not in st.session_state.show_crop_zoom:
+                    st.session_state.show_crop_zoom[zoom_key] = False
+                
+                # Bouton pour zoomer avec colonnes pour centrer
+                col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
+                with col_btn2:
+                    if st.button("🔍 Zoom", key=f"btn_zoom_{idx}", use_container_width=True):
+                        st.session_state.show_crop_zoom[zoom_key] = not st.session_state.show_crop_zoom[zoom_key]
+                        st.rerun()
+                
+                # Afficher le modal de zoom si activé
+                #if st.session_state.get("show_crop_zoom", {}).get(zoom_key, False):
+                if st.session_state.show_crop_zoom[zoom_key]:
+                    # Créer un dialog/modal avec st.dialog (Streamlit 1.31+) ou container
+                    with st.container():
+                        # Overlay sombre en arrière-plan
+                        st.markdown("""
+                        <div class="zoom-modal-overlay" onclick="return false;">
+                            <div class="zoom-modal-content">
+                        """, unsafe_allow_html=True)
+                        
+                        # Bouton fermer en haut
+                        if st.button("✕ Fermer le zoom", key=f"close_zoom_top_{idx}", type="primary"):
+                            st.session_state.show_crop_zoom[zoom_key] = False
+                            st.rerun()
+                        
+                        # Afficher l'image en grand
+                        st.image(img_crop, use_container_width=True)
+                        
+                        # Bouton fermer en bas aussi
+                        if st.button("✕ Fermer", key=f"close_zoom_bottom_{idx}", type="primary"):
+                            st.session_state.show_crop_zoom[zoom_key] = False
+                            st.rerun()
+                        
+                        st.markdown("</div></div>", unsafe_allow_html=True)
             else:
                 st.error("❌ Image crop non trouvée")
         
