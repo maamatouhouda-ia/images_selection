@@ -35,13 +35,6 @@ SMTP_CONFIG = {
 
 # ==================== FONCTIONS UTILITAIRES ====================
 
-def image_to_base64(image):
-    """Convertit une image PIL en base64 pour l'affichage HTML"""
-    buffered = BytesIO()
-    image.save(buffered, format="PNG")
-    img_str = base64.b64encode(buffered.getvalue()).decode()
-    return f"data:image/png;base64,{img_str}"
-
 def scan_images_directory(root_dir):
     """
     Scanne le dossier racine et récupère toutes les paires d'images bbox/crop
@@ -99,16 +92,17 @@ def scan_images_directory(root_dir):
     return images_data
 
 def initialize_session(images_data):
-    """Initialise les réponses pour toutes les images - SANS label par défaut"""
+    """Initialise les réponses pour toutes les images"""
     if "responses" not in st.session_state:
         st.session_state.responses = {}
     
     for i, img_data in enumerate(images_data):
         if i not in st.session_state.responses:
             st.session_state.responses[i] = {
-                "label_choisi": None,  # Changé de label_initial à None
+                "label_choisi": None,
                 "commentaire": "",
-                "annotated": False  # Nouveau flag pour tracker l'annotation
+                "annotated": False,
+                "ignored": False  # NOUVEAU: flag pour images ignorées
             }
 
 def get_save_filepath(annotator_name):
@@ -190,12 +184,16 @@ def export_to_csv(images_data):
     results = []
     for i, img_data in enumerate(images_data):
         response = st.session_state.responses.get(i, {})
+        ignored = response.get("ignored", False)
+        label = response.get("label_choisi", "")
+        
         results.append({
             "image_bbox": img_data["bbox_file"],
             "image_crop": img_data["crop_file"],
             "dossier_source": img_data["folder"],
             "label_initial": img_data["label_initial"],
-            "label_choisi": response.get("label_choisi", ""),
+            "label_choisi": "IGNORÉ" if ignored else label,
+            "statut": "Ignoré" if ignored else ("Annoté" if response.get("annotated", False) else "Non annoté"),
             "commentaire": response.get("commentaire", ""),
             "annotated": response.get("annotated", False)
         })
@@ -212,6 +210,7 @@ def send_completion_email(annotator_name, images_data, csv_content):
         msg['Subject'] = f"✅ Annotation terminée - {annotator_name} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         
         completed = sum(1 for r in st.session_state.responses.values() if r.get("annotated", False))
+        ignored = sum(1 for r in st.session_state.responses.values() if r.get("ignored", False))
         
         body = f"""
 Bonjour,
@@ -221,6 +220,7 @@ L'annotateur {annotator_name} a terminé l'annotation des images.
 📊 Statistiques:
 - Total d'images: {len(images_data)}
 - Images annotées: {completed}
+- Images ignorées: {ignored}
 - Date de fin: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 - Dossier source: {st.session_state.root_directory}
 
@@ -267,6 +267,10 @@ def count_completed_annotations():
     """Compte le nombre d'annotations réellement effectuées"""
     return sum(1 for r in st.session_state.responses.values() if r.get("annotated", False))
 
+def count_ignored_images():
+    """Compte le nombre d'images ignorées"""
+    return sum(1 for r in st.session_state.responses.values() if r.get("ignored", False))
+
 # ==================== INITIALISATION ====================
 
 if "current_index" not in st.session_state:
@@ -286,6 +290,9 @@ if "images_data" not in st.session_state:
 
 if "auto_save_enabled" not in st.session_state:
     st.session_state.auto_save_enabled = True
+
+if "show_crop_zoom" not in st.session_state:
+    st.session_state.show_crop_zoom = {}
 
 # ==================== CSS ====================
 
@@ -325,6 +332,17 @@ st.markdown("""
     background-color: #fff3e0;
     color: #e65100;
 }
+.badge-ignored {
+    background-color: #ffebee;
+    color: #c62828;
+}
+.ignore-section {
+    border: 2px dashed #ef5350;
+    border-radius: 8px;
+    padding: 15px;
+    margin: 15px 0;
+    background-color: #fff8f8;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -343,7 +361,9 @@ if not st.session_state.started:
     
     **Fonctionnalités:**
     - ✅ Affichage côte à côte des images bbox et crop
+    - 🔍 Zoom sur l'image crop
     - 🏷️ Sélection du label approprié parmi les classes prédéfinies
+    - ❌ **Option pour ignorer les images qui ne correspondent à aucune classe**
     - 💾 Sauvegarde automatique de la progression
     - 📧 Notification par email à la fin de la sélection
     - ⏯️ Possibilité de reprendre une session en cours
@@ -494,7 +514,8 @@ else:
                             st.session_state.responses[i] = {
                                 "label_choisi": None,
                                 "commentaire": "",
-                                "annotated": False
+                                "annotated": False,
+                                "ignored": False
                             }
                     
                     diff = new_count - old_count
@@ -526,8 +547,11 @@ else:
         st.markdown("---")
         st.markdown("### 📈 Statistiques")
         completed = count_completed_annotations()
+        ignored = count_ignored_images()
         st.metric("Annotées", f"{completed}/{len(images_data)}")
-        progress_pct = completed / len(images_data) if len(images_data) > 0 else 0
+        st.metric("Ignorées", f"{ignored}/{len(images_data)}")
+        total_processed = completed + ignored
+        progress_pct = total_processed / len(images_data) if len(images_data) > 0 else 0
         st.progress(progress_pct)
         
         # Statistiques par sous-dossier
@@ -536,14 +560,18 @@ else:
             for i, img in enumerate(images_data):
                 folder = img["folder"]
                 if folder not in folders:
-                    folders[folder] = {"total": 0, "annotated": 0}
+                    folders[folder] = {"total": 0, "annotated": 0, "ignored": 0}
                 folders[folder]["total"] += 1
                 if st.session_state.responses[i].get("annotated", False):
                     folders[folder]["annotated"] += 1
+                if st.session_state.responses[i].get("ignored", False):
+                    folders[folder]["ignored"] += 1
             
             for folder in sorted(folders.keys()):
                 stats = folders[folder]
-                st.write(f"**{folder}:** {stats['annotated']}/{stats['total']}")
+                st.write(f"**{folder}:**")
+                st.write(f"  ✅ Annotées: {stats['annotated']}/{stats['total']}")
+                st.write(f"  ❌ Ignorées: {stats['ignored']}/{stats['total']}")
     
     # Vérifier si terminé
     if idx >= len(images_data):
@@ -580,8 +608,8 @@ else:
                     "Image": img["bbox_file"],
                     "Dossier": img["folder"],
                     "Label initial": img["label_initial"],
-                    "Label choisi": st.session_state.responses[i]["label_choisi"] or "Non annoté",
-                    "Annoté": "✅" if st.session_state.responses[i].get("annotated", False) else "⏳"
+                    "Label choisi": "IGNORÉ" if st.session_state.responses[i].get("ignored", False) else (st.session_state.responses[i]["label_choisi"] or "Non annoté"),
+                    "Statut": "❌ Ignoré" if st.session_state.responses[i].get("ignored", False) else ("✅ Annoté" if st.session_state.responses[i].get("annotated", False) else "⏳ Non annoté")
                 }
                 for i, img in enumerate(images_data)
             ])
@@ -608,9 +636,18 @@ else:
         st.markdown(f"### Image {idx + 1} / {len(images_data)}")
         
         # Statut de l'annotation actuelle
+        is_ignored = st.session_state.responses[idx].get("ignored", False)
         is_annotated = st.session_state.responses[idx].get("annotated", False)
-        status_badge = "✅ Annotée" if is_annotated else "⏳ Non annotée"
-        status_class = "badge-selected" if is_annotated else "badge-pending"
+        
+        if is_ignored:
+            status_badge = "❌ Ignorée"
+            status_class = "badge-ignored"
+        elif is_annotated:
+            status_badge = "✅ Annotée"
+            status_class = "badge-selected"
+        else:
+            status_badge = "⏳ Non annotée"
+            status_class = "badge-pending"
         
         # Badge du dossier source
         st.markdown(f"""
@@ -651,9 +688,6 @@ else:
                 st.caption(f"📄 {img_data['crop_file']}")
 
                 zoom_key = f"zoom_{idx}"
-                # Initialisation du state si nécessaire
-                if "show_crop_zoom" not in st.session_state:
-                    st.session_state.show_crop_zoom = {}
                 
                 if zoom_key not in st.session_state.show_crop_zoom:
                     st.session_state.show_crop_zoom[zoom_key] = False
@@ -666,14 +700,11 @@ else:
                         st.rerun()
                 
                 # Afficher le modal de zoom si activé
-                #if st.session_state.get("show_crop_zoom", {}).get(zoom_key, False):
                 if st.session_state.show_crop_zoom[zoom_key]:
-                    # Créer un dialog/modal avec st.dialog (Streamlit 1.31+) ou container
                     with st.container():
-                        # Overlay sombre en arrière-plan
                         st.markdown("""
-                        <div class="zoom-modal-overlay" onclick="return false;">
-                            <div class="zoom-modal-content">
+                        <div style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+                             background-color: rgba(0,0,0,0.8); z-index: 9999; padding: 20px;">
                         """, unsafe_allow_html=True)
                         
                         # Bouton fermer en haut
@@ -689,7 +720,7 @@ else:
                             st.session_state.show_crop_zoom[zoom_key] = False
                             st.rerun()
                         
-                        st.markdown("</div></div>", unsafe_allow_html=True)
+                        st.markdown("</div>", unsafe_allow_html=True)
             else:
                 st.error("❌ Image crop non trouvée")
         
@@ -698,26 +729,51 @@ else:
         # Zone d'annotation
         st.markdown("### ✏️ Annotation")
         
-        current_choice = st.session_state.responses[idx]["label_choisi"]
+        # **SECTION IGNORER** (NOUVEAU)
+        st.markdown("<div class='ignore-section'>", unsafe_allow_html=True)
         
-        # Si pas encore de choix, utiliser le label initial comme suggestion
-        if current_choice is None:
-            default_index = CLASSES_DISPONIBLES.index(img_data["label_initial"]) if img_data["label_initial"] in CLASSES_DISPONIBLES else 0
-        else:
-            default_index = CLASSES_DISPONIBLES.index(current_choice) if current_choice in CLASSES_DISPONIBLES else 0
-        
-        choice = st.radio(
-            "🏷️ Sélectionnez le label approprié:",
-            CLASSES_DISPONIBLES,
-            index=default_index,
-            key=f"label_{idx}",
-            horizontal=True
+        ignore_checkbox = st.checkbox(
+            "❌ **Ignorer cette image** (ne correspond à aucune des 4 classes)",
+            value=is_ignored,
+            key=f"ignore_{idx}",
+            help="Cochez cette case si l'image ne correspond à aucune des classes disponibles"
         )
         
-        # Marquer comme annoté si l'utilisateur change le choix
-        if choice != current_choice:
-            st.session_state.responses[idx]["label_choisi"] = choice
-            st.session_state.responses[idx]["annotated"] = True
+        if ignore_checkbox != is_ignored:
+            st.session_state.responses[idx]["ignored"] = ignore_checkbox
+            if ignore_checkbox:
+                # Si on ignore, on efface le label et on marque comme non annoté
+                st.session_state.responses[idx]["label_choisi"] = None
+                st.session_state.responses[idx]["annotated"] = False
+            st.rerun()
+        
+        st.markdown("</div>", unsafe_allow_html=True)
+        
+        # SÉLECTION DU LABEL (désactivé si ignoré)
+        if not ignore_checkbox:
+            current_choice = st.session_state.responses[idx]["label_choisi"]
+            
+            # Si pas encore de choix, utiliser le label initial comme suggestion
+            if current_choice is None:
+                default_index = CLASSES_DISPONIBLES.index(img_data["label_initial"]) if img_data["label_initial"] in CLASSES_DISPONIBLES else 0
+            else:
+                default_index = CLASSES_DISPONIBLES.index(current_choice) if current_choice in CLASSES_DISPONIBLES else 0
+            
+            choice = st.radio(
+                "🏷️ Sélectionnez le label approprié:",
+                CLASSES_DISPONIBLES,
+                index=default_index,
+                key=f"label_{idx}",
+                horizontal=True
+            )
+            
+            # Marquer comme annoté si l'utilisateur change le choix
+            if choice != current_choice:
+                st.session_state.responses[idx]["label_choisi"] = choice
+                st.session_state.responses[idx]["annotated"] = True
+                st.session_state.responses[idx]["ignored"] = False
+        else:
+            st.info("ℹ️ Image ignorée - sélection de label désactivée")
         
         comment = st.text_area(
             "💬 Commentaire (optionnel):",
@@ -742,11 +798,13 @@ else:
         with col3:
             button_label = "Suivant ➡️" if idx < len(images_data) - 1 else "✅ Terminer"
             if st.button(button_label, type="primary", use_container_width=True):
-                # Marquer comme annoté si pas déjà fait
-                if not st.session_state.responses[idx].get("annotated", False):
+                # Marquer comme annoté ou ignoré si pas déjà fait
+                if not ignore_checkbox and not st.session_state.responses[idx].get("annotated", False):
                     st.session_state.responses[idx]["annotated"] = True
                     if st.session_state.responses[idx]["label_choisi"] is None:
-                        st.session_state.responses[idx]["label_choisi"] = choice
+                        # Utiliser le choix actuel du radio button si disponible
+                        if not ignore_checkbox:
+                            st.session_state.responses[idx]["label_choisi"] = CLASSES_DISPONIBLES[default_index]
                 
                 st.session_state.current_index += 1
                 
@@ -762,6 +820,6 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; font-size: 0.8rem;'>
-    Outil d'annotation bbox/crop | Développé par Houda MAAMATOU
+    Outil d'annotation bbox/crop | Développé par Houda MAAMATOU & Claude
 </div>
 """, unsafe_allow_html=True)
