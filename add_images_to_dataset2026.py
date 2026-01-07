@@ -483,7 +483,7 @@ else:
         st.markdown(f"**👤 Annotateur:** {st.session_state.annotator_name}")
         st.markdown(f"**📊 Progression:** {idx}/{len(images_data)}")
         
-        if st.button("💾 Sauvegarder maintenant", use_container_width=True):
+        if st.button("💾 Sauvegarder maintenant", width='stretch'):
             success, msg = save_progress(images_data)
             if success:
                 st.success(msg)
@@ -493,7 +493,7 @@ else:
         st.markdown("---")
         
         # Bouton pour recharger les images
-        if st.button("🔄 Recharger les images du dossier", use_container_width=True):
+        if st.button("🔄 Recharger les images du dossier", width='stretch'):
             with st.spinner("🔍 Rechargement en cours..."):
                 # Sauvegarder d'abord
                 save_progress(images_data)
@@ -538,7 +538,7 @@ else:
         )
         st.session_state.auto_save_enabled = auto_save
         
-        if st.button("🏠 Retour à l'accueil", use_container_width=True):
+        if st.button("🏠 Retour à l'accueil", width='stretch'):
             if st.session_state.auto_save_enabled:
                 save_progress(images_data)
             reset_session()
@@ -613,7 +613,7 @@ else:
                 }
                 for i, img in enumerate(images_data)
             ])
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df, width='stretch')
         
         # Téléchargement
         st.download_button(
@@ -621,10 +621,10 @@ else:
             data=csv_content,
             file_name=f"annotations_{st.session_state.annotator_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv",
-            use_container_width=True
+            width='stretch'
         )
         
-        if st.button("🔄 Nouvelle annotation", use_container_width=True):
+        if st.button("🔄 Nouvelle annotation", width='stretch'):
             reset_session()
             st.rerun()
     
@@ -670,7 +670,7 @@ else:
             
             if os.path.exists(img_data["bbox_path"]):
                 img_bbox = Image.open(img_data["bbox_path"])
-                st.image(img_bbox, use_container_width=True)
+                st.image(img_bbox, width='stretch')
                 st.caption(f"📄 {img_data['bbox_file']}")
             else:
                 st.error("❌ Image bbox non trouvée")
@@ -684,7 +684,7 @@ else:
                 img_crop = Image.open(img_data["crop_path"])
                 
                 # Afficher l'image normalement
-                st.image(img_crop, use_container_width=False)
+                st.image(img_crop, width='content')
                 st.caption(f"📄 {img_data['crop_file']}")
 
                 zoom_key = f"zoom_{idx}"
@@ -695,32 +695,30 @@ else:
                 # Bouton pour zoomer avec colonnes pour centrer
                 col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
                 with col_btn2:
-                    if st.button("🔍 Zoom", key=f"btn_zoom_{idx}", use_container_width=True):
+                    if st.button("🔍 Zoom", key=f"btn_zoom_{idx}", width='stretch'):
                         st.session_state.show_crop_zoom[zoom_key] = not st.session_state.show_crop_zoom[zoom_key]
                         st.rerun()
                 
                 # Afficher le modal de zoom si activé
                 if st.session_state.show_crop_zoom[zoom_key]:
-                    with st.container():
-                        st.markdown("""
-                        <div style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
-                             background-color: rgba(0,0,0,0.8); z-index: 9999; padding: 20px;">
-                        """, unsafe_allow_html=True)
-                        
-                        # Bouton fermer en haut
-                        if st.button("✕ Fermer le zoom", key=f"close_zoom_top_{idx}", type="primary"):
-                            st.session_state.show_crop_zoom[zoom_key] = False
-                            st.rerun()
-                        
-                        # Afficher l'image en grand
-                        st.image(img_crop, use_container_width=True)
-                        
-                        # Bouton fermer en bas aussi
-                        if st.button("✕ Fermer", key=f"close_zoom_bottom_{idx}", type="primary"):
-                            st.session_state.show_crop_zoom[zoom_key] = False
-                            st.rerun()
-                        
-                        st.markdown("</div>", unsafe_allow_html=True)
+                    # Créer une section séparée pour le zoom
+                    st.markdown("---")
+                    st.markdown("### 🔍 Mode Zoom")
+                    
+                    # Bouton fermer en haut
+                    if st.button("✕ Fermer le zoom", key=f"close_zoom_top_{idx}", type="primary", width='stretch'):
+                        st.session_state.show_crop_zoom[zoom_key] = False
+                        st.rerun()
+                    
+                    # Afficher l'image en grand
+                    st.image(img_crop, width='stretch', caption="Image CROP agrandie")
+                    
+                    # Bouton fermer en bas aussi
+                    if st.button("✕ Fermer le zoom", key=f"close_zoom_bottom_{idx}", type="secondary", width='stretch'):
+                        st.session_state.show_crop_zoom[zoom_key] = False
+                        st.rerun()
+                    
+                    st.markdown("---")
             else:
                 st.error("❌ Image crop non trouvée")
         
@@ -791,13 +789,13 @@ else:
         col1, col2, col3 = st.columns([1, 2, 1])
         
         with col1:
-            if st.button("⬅️ Précédent", disabled=(idx == 0), use_container_width=True):
+            if st.button("⬅️ Précédent", disabled=(idx == 0), width='stretch'):
                 st.session_state.current_index -= 1
                 st.rerun()
         
         with col3:
             button_label = "Suivant ➡️" if idx < len(images_data) - 1 else "✅ Terminer"
-            if st.button(button_label, type="primary", use_container_width=True):
+            if st.button(button_label, type="primary", width='stretch'):
                 # Marquer comme annoté ou ignoré si pas déjà fait
                 if not ignore_checkbox and not st.session_state.responses[idx].get("annotated", False):
                     st.session_state.responses[idx]["annotated"] = True
