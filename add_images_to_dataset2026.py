@@ -21,7 +21,12 @@ st.set_page_config(
 # ==================== CONFIGURATION ====================
 
 CLASSES_DISPONIBLES = ["fissure_degradee", "fissure_significative", "joint_ouvert", "faiencage"]
-SAVE_FOLDER = "sauvegardes_annotations_images"
+
+# CORRECTION MAJEURE: Utiliser un chemin absolu pour les sauvegardes
+# Cela garantit que les sauvegardes sont toujours au même endroit
+SCRIPT_DIR = Path(__file__).parent.absolute() if '__file__' in globals() else Path.cwd()
+SAVE_FOLDER = SCRIPT_DIR / "sauvegardes_annotations_images"
+
 IMAGES_SUFFIXES = ["_bbox", "_crop"]
 
 # Configuration email
@@ -35,6 +40,13 @@ SMTP_CONFIG = {
 
 # ==================== FONCTIONS UTILITAIRES ====================
 
+def get_absolute_path(path_str):
+    """Convertit un chemin en chemin absolu"""
+    path = Path(path_str).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path.resolve()
+
 def scan_images_directory(root_dir):
     """
     Scanne le dossier racine et récupère toutes les paires d'images bbox/crop
@@ -42,15 +54,18 @@ def scan_images_directory(root_dir):
     """
     images_data = []
     
-    if not os.path.exists(root_dir):
-        st.error(f"❌ Le dossier '{root_dir}' n'existe pas!")
+    # CORRECTION: Convertir en chemin absolu
+    root_path = get_absolute_path(root_dir)
+    
+    if not root_path.exists():
+        st.error(f"❌ Le dossier '{root_path}' n'existe pas!")
         return images_data
     
     # Parcourir tous les sous-dossiers
-    for subdir in sorted(os.listdir(root_dir)):
-        subdir_path = os.path.join(root_dir, subdir)
+    for subdir in sorted(os.listdir(root_path)):
+        subdir_path = root_path / subdir
         
-        if not os.path.isdir(subdir_path):
+        if not subdir_path.is_dir():
             continue
         
         # Récupérer toutes les images du sous-dossier
@@ -85,8 +100,8 @@ def scan_images_directory(root_dir):
                     "label_initial": subdir,
                     "bbox_file": files["bbox"],
                     "crop_file": files["crop"],
-                    "bbox_path": os.path.join(subdir_path, files["bbox"]),
-                    "crop_path": os.path.join(subdir_path, files["crop"])
+                    "bbox_path": str(subdir_path / files["bbox"]),
+                    "crop_path": str(subdir_path / files["crop"])
                 })
     
     return images_data
@@ -102,44 +117,50 @@ def initialize_session(images_data):
                 "label_choisi": None,
                 "commentaire": "",
                 "annotated": False,
-                "ignored": False  # NOUVEAU: flag pour images ignorées
+                "ignored": False
             }
 
 def get_save_filepath(annotator_name):
     """Génère le chemin du fichier de sauvegarde"""
-    if not os.path.exists(SAVE_FOLDER):
-        os.makedirs(SAVE_FOLDER)
+    # CORRECTION: Créer le dossier s'il n'existe pas
+    SAVE_FOLDER.mkdir(parents=True, exist_ok=True)
     
     safe_name = "".join(c for c in annotator_name if c.isalnum() or c in (' ', '_')).strip()
     safe_name = safe_name.replace(' ', '_')
-    return os.path.join(SAVE_FOLDER, f"sauvegarde_{safe_name}.json")
+    
+    filepath = SAVE_FOLDER / f"sauvegarde_{safe_name}.json"
+    return filepath
 
 def save_progress(images_data):
     """Sauvegarde la progression actuelle"""
     if not st.session_state.annotator_name:
         return False, "Nom d'annotateur manquant"
     
+    # CORRECTION: Sauvegarder le chemin absolu du dossier
     save_data = {
         "annotateur": st.session_state.annotator_name,
         "root_directory": st.session_state.root_directory,
+        "root_directory_absolute": str(get_absolute_path(st.session_state.root_directory)),
         "date_sauvegarde": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "current_index": st.session_state.current_index,
         "responses": st.session_state.responses,
-        "total_images": len(images_data)
+        "total_images": len(images_data),
+        "version": "2.0"
     }
     
     filepath = get_save_filepath(st.session_state.annotator_name)
     try:
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(save_data, f, ensure_ascii=False, indent=2)
-        return True, f"✅ Sauvegarde réussie"
+        return True, f"✅ Sauvegarde réussie dans {filepath}"
     except Exception as e:
         return False, f"❌ Erreur: {str(e)}"
 
 def load_progress(annotator_name):
     """Charge une sauvegarde existante"""
     filepath = get_save_filepath(annotator_name)
-    if not os.path.exists(filepath):
+    
+    if not filepath.exists():
         return None, "Aucune sauvegarde trouvée"
     
     try:
@@ -152,31 +173,44 @@ def load_progress(annotator_name):
                 int(k): v for k, v in save_data['responses'].items()
             }
         
+        # CORRECTION: Utiliser le chemin absolu si disponible
+        if 'root_directory_absolute' in save_data:
+            save_data['root_directory'] = save_data['root_directory_absolute']
+        
         return save_data, "✅ Sauvegarde chargée"
     except Exception as e:
         return None, f"❌ Erreur: {str(e)}"
 
 def list_saved_sessions():
     """Liste toutes les sessions sauvegardées"""
-    if not os.path.exists(SAVE_FOLDER):
-        return []
+    # CORRECTION: Créer le dossier s'il n'existe pas
+    SAVE_FOLDER.mkdir(parents=True, exist_ok=True)
     
     saves = []
-    for filename in os.listdir(SAVE_FOLDER):
-        if filename.startswith("sauvegarde_") and filename.endswith(".json"):
-            filepath = os.path.join(SAVE_FOLDER, filename)
-            try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    saves.append({
-                        'annotateur': data.get('annotateur', 'Inconnu'),
-                        'date': data.get('date_sauvegarde', 'Inconnue'),
-                        'progression': f"{data.get('current_index', 0)}/{data.get('total_images', 0)}",
-                        'filename': filename,
-                        'root_directory': data.get('root_directory', '')
-                    })
-            except:
-                continue
+    for filepath in SAVE_FOLDER.glob("sauvegarde_*.json"):
+																			 
+														  
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                
+                # Utiliser le chemin absolu si disponible
+                root_dir = data.get('root_directory_absolute', data.get('root_directory', ''))
+                
+                saves.append({
+                    'annotateur': data.get('annotateur', 'Inconnu'),
+                    'date': data.get('date_sauvegarde', 'Inconnue'),
+                    'progression': f"{data.get('current_index', 0)}/{data.get('total_images', 0)}",
+                    'filename': filepath.name,
+                    'root_directory': root_dir,
+                    'filepath': str(filepath)
+                })
+        except Exception as e:
+            st.warning(f"⚠️ Impossible de lire {filepath.name}: {e}")
+            continue
+    
+    # Trier par date (plus récent en premier)
+    saves.sort(key=lambda x: x['date'], reverse=True)
     return saves
 
 def export_to_csv(images_data):
@@ -343,6 +377,14 @@ st.markdown("""
     margin: 15px 0;
     background-color: #fff8f8;
 }
+.save-location {
+    background-color: #f5f5f5;
+    padding: 10px;
+    border-radius: 5px;
+    border-left: 4px solid #2196F3;
+    margin: 10px 0;
+    font-size: 0.85rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -350,6 +392,23 @@ st.markdown("""
 
 st.title("🖼️ Ajout des échantillons de classification des fissures.")
 st.markdown("---")
+
+# AFFICHER L'EMPLACEMENT DES SAUVEGARDES
+with st.expander("ℹ️ Informations sur les sauvegardes - IMPORTANT"):
+    st.markdown(f"""
+    <div class='save-location'>
+        <strong>📁 Emplacement des sauvegardes:</strong><br>
+        <code>{SAVE_FOLDER}</code><br><br>
+        <strong>💡 Conseil:</strong> Vos sauvegardes sont maintenant toujours stockées ici, 
+        peu importe d'où vous lancez l'application!
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if SAVE_FOLDER.exists():
+        saves_count = len(list(SAVE_FOLDER.glob("sauvegarde_*.json")))
+        st.success(f"✅ {saves_count} sauvegarde(s) trouvée(s) dans ce dossier")
+    else:
+        st.info("ℹ️ Le dossier de sauvegarde sera créé automatiquement à la première sauvegarde")
 
 # ==================== ÉCRAN DE DÉMARRAGE ====================
 
@@ -363,8 +422,8 @@ if not st.session_state.started:
     - ✅ Affichage côte à côte des images bbox et crop
     - 🔍 Zoom sur l'image crop
     - 🏷️ Sélection du label approprié parmi les classes prédéfinies
-    - ❌ **Option pour ignorer les images qui ne correspondent à aucune classe**
-    - 💾 Sauvegarde automatique de la progression
+    - ❌ Option pour ignorer les images qui ne correspondent à aucune classe
+    - 💾 **Sauvegarde persistante** (vos données sont conservées entre les sessions)
     - 📧 Notification par email à la fin de la sélection
     - ⏯️ Possibilité de reprendre une session en cours
     """)
@@ -383,7 +442,7 @@ if not st.session_state.started:
         
         # Aide pour le chemin
         if st.checkbox("📂 Aide : afficher le répertoire actuel"):
-            st.code(f"Répertoire actuel : {os.getcwd()}")
+            st.code(f"Répertoire actuel : {Path.cwd()}")
             st.info("💡 Le chemin peut être absolu (ex: /home/user/dataset) ou relatif (ex: ./dataset)")
         
         if st.button("🚀 Démarrer l'annotation", type="primary", key="start_new"):
@@ -392,11 +451,12 @@ if not st.session_state.started:
             elif not root_dir.strip():
                 st.error("⚠️ Veuillez spécifier le dossier principal")
             else:
-                # Nettoyer le chemin : supprimer espaces parasites
+                # Nettoyer et convertir en chemin absolu
                 clean_path = root_dir.strip().replace(' /', '/').replace('/ ', '/')
+                abs_path = get_absolute_path(clean_path)
                 
-                if not os.path.exists(clean_path):
-                    st.error(f"⚠️ Le dossier '{clean_path}' n'existe pas")
+                if not abs_path.exists():
+                    st.error(f"⚠️ Le dossier '{abs_path}' n'existe pas")
                     st.info(f"💡 Vérifiez que le chemin est correct")
                 else:
                     # Vérifier si une sauvegarde existe
@@ -407,14 +467,14 @@ if not st.session_state.started:
                     else:
                         # Scanner les images
                         with st.spinner("🔍 Analyse du dossier en cours..."):
-                            images_data = scan_images_directory(clean_path)
+                            images_data = scan_images_directory(str(abs_path))
                         
                         if not images_data:
                             st.error("❌ Aucune paire d'images bbox/crop trouvée dans ce dossier")
                             st.info("💡 Vérifiez que vos images se terminent par '_bbox' et '_crop'")
                         else:
                             st.session_state.annotator_name = name.strip()
-                            st.session_state.root_directory = clean_path
+                            st.session_state.root_directory = str(abs_path)
                             st.session_state.images_data = images_data
                             st.session_state.current_index = 0
                             initialize_session(images_data)
@@ -441,35 +501,51 @@ if not st.session_state.started:
             st.markdown(f"**{len(saved_sessions)} session(s) sauvegardée(s):**")
             
             for session in saved_sessions:
-                with st.expander(f"👤 {session['annotateur']} - {session['progression']}"):
+                with st.expander(f"👤 {session['annotateur']} - {session['progression']} - {session['date']}"):
                     col1, col2 = st.columns([3, 1])
                     with col1:
                         st.write(f"📊 Progression: {session['progression']}")
                         st.write(f"🕒 Date: {session['date']}")
                         st.write(f"📁 Dossier: {session['root_directory']}")
+                        st.caption(f"💾 Fichier: {session['filepath']}")
                     with col2:
                         if st.button("▶️ Reprendre", key=f"load_{session['filename']}"):
                             save_data, msg = load_progress(session['annotateur'])
                             if save_data:
-                                # Recharger les images
-                                with st.spinner("🔍 Rechargement des images..."):
-                                    images_data = scan_images_directory(save_data['root_directory'])
+                                # Vérifier que le dossier existe toujours
+																				   
+                                root_dir_path = get_absolute_path(save_data['root_directory'])
                                 
-                                if images_data:
-                                    st.session_state.annotator_name = save_data['annotateur']
-                                    st.session_state.root_directory = save_data['root_directory']
-                                    st.session_state.current_index = save_data['current_index']
-                                    st.session_state.responses = save_data['responses']
-                                    st.session_state.images_data = images_data
-                                    st.session_state.started = True
-                                    st.success("✅ Session chargée!")
-                                    st.rerun()
+                                if not root_dir_path.exists():
+                                    st.error(f"❌ Le dossier source n'existe plus: {root_dir_path}")
+                                    st.info("💡 Vérifiez que le dossier n'a pas été déplacé ou supprimé")
+																							   
+																					   
+																			  
+																   
+																	   
+											  
                                 else:
-                                    st.error("❌ Impossible de recharger les images du dossier")
+                                    # Recharger les images
+                                    with st.spinner("🔍 Rechargement des images..."):
+                                        images_data = scan_images_directory(str(root_dir_path))
+                                    
+                                    if images_data:
+                                        st.session_state.annotator_name = save_data['annotateur']
+                                        st.session_state.root_directory = str(root_dir_path)
+                                        st.session_state.current_index = save_data['current_index']
+                                        st.session_state.responses = save_data['responses']
+                                        st.session_state.images_data = images_data
+                                        st.session_state.started = True
+                                        st.success("✅ Session chargée!")
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Impossible de recharger les images du dossier")
                             else:
                                 st.error(msg)
         else:
             st.info("📭 Aucune session sauvegardée trouvée")
+            st.markdown(f"**Emplacement de sauvegarde:** `{SAVE_FOLDER}`")
 
 # ==================== INTERFACE D'ANNOTATION ====================
 
@@ -483,7 +559,7 @@ else:
         st.markdown(f"**👤 Annotateur:** {st.session_state.annotator_name}")
         st.markdown(f"**📊 Progression:** {idx}/{len(images_data)}")
         
-        if st.button("💾 Sauvegarder maintenant", width='stretch'):
+        if st.button("💾 Sauvegarder maintenant", use_container_width=True):
             success, msg = save_progress(images_data)
             if success:
                 st.success(msg)
@@ -493,7 +569,7 @@ else:
         st.markdown("---")
         
         # Bouton pour recharger les images
-        if st.button("🔄 Recharger les images du dossier", width='stretch'):
+        if st.button("🔄 Recharger les images du dossier", use_container_width=True):
             with st.spinner("🔍 Rechargement en cours..."):
                 # Sauvegarder d'abord
                 save_progress(images_data)
@@ -538,7 +614,7 @@ else:
         )
         st.session_state.auto_save_enabled = auto_save
         
-        if st.button("🏠 Retour à l'accueil", width='stretch'):
+        if st.button("🏠 Retour à l'accueil", use_container_width=True):
             if st.session_state.auto_save_enabled:
                 save_progress(images_data)
             reset_session()
@@ -594,8 +670,8 @@ else:
             # Supprimer la sauvegarde temporaire
             try:
                 filepath = get_save_filepath(st.session_state.annotator_name)
-                if os.path.exists(filepath):
-                    os.remove(filepath)
+                if filepath.exists():
+                    filepath.unlink()
             except:
                 pass
         else:
