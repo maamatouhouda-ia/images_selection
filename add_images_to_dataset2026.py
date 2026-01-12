@@ -40,6 +40,20 @@ SMTP_CONFIG = {
 
 # ==================== FONCTIONS UTILITAIRES ====================
 
+def auto_annotate_skipped_images(from_index, to_index, images_data):
+    """
+    Auto-annote les images sautées avec leur label initial
+    """
+    for i in range(from_index, to_index):
+        if i < len(images_data):
+            # Si l'image n'a pas déjà été annotée ou ignorée
+            if not st.session_state.responses[i].get("annotated", False) and \
+               not st.session_state.responses[i].get("ignored", False):
+                # Utiliser le label initial
+                st.session_state.responses[i]["label_choisi"] = images_data[i]["label_initial"]
+                st.session_state.responses[i]["annotated"] = True
+                st.session_state.responses[i]["commentaire"] = "Auto-annoté (saut d'image)"
+
 def get_absolute_path(path_str):
     """Convertit un chemin en chemin absolu"""
     path = Path(path_str).expanduser()
@@ -213,13 +227,24 @@ def list_saved_sessions():
     saves.sort(key=lambda x: x['date'], reverse=True)
     return saves
 
-def export_to_csv(images_data):
-    """Exporte les annotations au format CSV"""
+def export_to_csv(images_data, only_annotated=False):
+    """
+    Exporte les annotations au format CSV
+    
+    Args:
+        images_data: Liste des données d'images
+        only_annotated: Si True, exporte uniquement les images annotées/ignorées
+    """
     results = []
     for i, img_data in enumerate(images_data):
         response = st.session_state.responses.get(i, {})
         ignored = response.get("ignored", False)
+        annotated = response.get("annotated", False)
         label = response.get("label_choisi", "")
+        
+        # Si only_annotated=True, sauter les images non traitées
+        if only_annotated and not annotated and not ignored:
+            continue
         
         results.append({
             "image_bbox": img_data["bbox_file"],
@@ -227,38 +252,52 @@ def export_to_csv(images_data):
             "dossier_source": img_data["folder"],
             "label_initial": img_data["label_initial"],
             "label_choisi": "IGNORÉ" if ignored else label,
-            "statut": "Ignoré" if ignored else ("Annoté" if response.get("annotated", False) else "Non annoté"),
+            "statut": "Ignoré" if ignored else ("Annoté" if annotated else "Non annoté"),
             "commentaire": response.get("commentaire", ""),
-            "annotated": response.get("annotated", False)
+            "annotated": annotated
         })
     
     df = pd.DataFrame(results)
     return df.to_csv(index=False).encode('utf-8')
 
-def send_completion_email(annotator_name, images_data, csv_content):
-    """Envoie un email de notification de fin d'annotation"""
+def send_completion_email(annotator_name, images_data, csv_content, is_partial=False):
+    """
+    Envoie un email de notification
+    
+    Args:
+        annotator_name: Nom de l'annotateur
+        images_data: Liste des images
+        csv_content: Contenu CSV à envoyer
+        is_partial: True si c'est un envoi partiel, False si c'est la fin
+    """
     try:
         msg = MIMEMultipart()
         msg['From'] = SMTP_CONFIG["sender"]
         msg['To'] = SMTP_CONFIG["receiver"]
-        msg['Subject'] = f"✅ Annotation terminée - {annotator_name} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+        subject_prefix = "📤 Annotations partielles" if is_partial else "✅ Annotation terminée"
+        msg['Subject'] = f"{subject_prefix} - {annotator_name} - {timestamp}"
         
         completed = sum(1 for r in st.session_state.responses.values() if r.get("annotated", False))
         ignored = sum(1 for r in st.session_state.responses.values() if r.get("ignored", False))
         
+        status_text = "partielles" if is_partial else "finales"
+        
         body = f"""
 Bonjour,
 
-L'annotateur {annotator_name} a terminé l'annotation des images.
+L'annotateur {annotator_name} a envoyé ses annotations {status_text}.
 
 📊 Statistiques:
-- Total d'images: {len(images_data)}
+- Total d'images dans le projet: {len(images_data)}
 - Images annotées: {completed}
 - Images ignorées: {ignored}
-- Date de fin: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+- Date d'envoi: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 - Dossier source: {st.session_state.root_directory}
+- Type d'envoi: {"Partiel (en cours)" if is_partial else "Final (terminé)"}
 
-Les résultats détaillés sont disponibles en pièce jointe au format CSV.
+Les résultats {'annotés jusqu\'à présent' if is_partial else 'finaux'} sont disponibles en pièce jointe au format CSV.
 
 Cordialement,
 Système d'annotation automatique
@@ -266,13 +305,16 @@ Système d'annotation automatique
         
         msg.attach(MIMEText(body, 'plain'))
         
-        # Ajouter le CSV en pièce jointe
+        # Ajouter le CSV en pièce jointe avec timestamp
         csv_attachment = MIMEBase('application', 'octet-stream')
         csv_attachment.set_payload(csv_content)
         encoders.encode_base64(csv_attachment)
+        
+        filename_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename_type = "partiel" if is_partial else "final"
         csv_attachment.add_header(
             'Content-Disposition',
-            f'attachment; filename=annotations_{annotator_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+            f'attachment; filename=annotations_{annotator_name}_{filename_type}_{filename_timestamp}.csv'
         )
         msg.attach(csv_attachment)
         
@@ -648,6 +690,77 @@ else:
                 st.write(f"**{folder}:**")
                 st.write(f"  ✅ Annotées: {stats['annotated']}/{stats['total']}")
                 st.write(f"  ❌ Ignorées: {stats['ignored']}/{stats['total']}")
+
+        
+        st.markdown("---")
+        st.markdown("### 🎯 Navigation rapide")
+
+        current_value = min(idx + 1, len(images_data))
+                
+        # Input pour aller à une image spécifique
+        target_image = st.number_input(
+                    "Aller à l'image n°:",
+                    min_value=1,
+                    max_value=len(images_data),
+                    value=current_value,
+                    step=1,
+                    key="target_image_input"
+        )
+                
+        if st.button("🚀 Aller à cette image", use_container_width=True):
+                    target_index = target_image - 1
+                    
+                    if target_index != idx:
+                        # Auto-annoter les images sautées
+                        if target_index > idx:
+                            auto_annotate_skipped_images(idx, target_index, images_data)
+                            skipped_count = target_index - idx
+                            st.toast(f"✅ {skipped_count} image(s) auto-annotée(s) avec leur label initial", icon="🏷️")
+                        
+                        st.session_state.current_index = target_index
+                        
+                        # Sauvegarde automatique après le saut
+                        if st.session_state.auto_save_enabled:
+                            save_progress(images_data)
+                        
+                        st.rerun()
+                
+        st.markdown("---")
+        st.markdown("### 📤 Envoi des annotations")
+                
+        annotated_count = count_completed_annotations()
+        ignored_count = count_ignored_images()
+        total_processed = annotated_count + ignored_count
+                
+        st.info(f"📊 {total_processed} image(s) prête(s) à être envoyée(s)")
+                
+        if st.button("📧 Envoyer les annotations actuelles", 
+                            use_container_width=True,
+                            type="secondary",
+                            disabled=(total_processed == 0)):
+                    if total_processed > 0:
+                        with st.spinner("📧 Préparation et envoi en cours..."):
+                            # Sauvegarder d'abord
+                            save_progress(images_data)
+                            
+                            # Exporter seulement les images annotées/ignorées
+                            csv_content = export_to_csv(images_data, only_annotated=True)
+                            
+                            # Envoyer l'email
+                            success, message = send_completion_email(
+                                st.session_state.annotator_name,
+                                images_data,
+                                csv_content,
+                                is_partial=True  # C'est un envoi partiel
+                            )
+                            
+                            if success:
+                                st.success(message)
+                                st.balloons()
+                            else:
+                                st.error(message)
+                    else:
+                        st.warning("⚠️ Aucune annotation à envoyer")
     
     # Vérifier si terminé
     if idx >= len(images_data):
@@ -655,14 +768,15 @@ else:
         st.balloons()
         
         # Exporter les résultats
-        csv_content = export_to_csv(images_data)
+        csv_content = export_to_csv(images_data, only_annotated=False)
         
         # Envoyer l'email
         with st.spinner("📧 Envoi de la notification..."):
             success, message = send_completion_email(
                 st.session_state.annotator_name,
                 images_data,
-                csv_content
+                csv_content,
+                is_partial=False  # C'est l'envoi final
             )
         
         if success:
@@ -714,10 +828,14 @@ else:
         # Statut de l'annotation actuelle
         is_ignored = st.session_state.responses[idx].get("ignored", False)
         is_annotated = st.session_state.responses[idx].get("annotated", False)
+        is_auto_annotated = "Auto-annoté" in st.session_state.responses[idx].get("commentaire", "")
         
         if is_ignored:
             status_badge = "❌ Ignorée"
             status_class = "badge-ignored"
+        elif is_auto_annotated:
+            status_badge = "🤖 Auto-annotée"
+            status_class = "badge-initial"
         elif is_annotated:
             status_badge = "✅ Annotée"
             status_class = "badge-selected"
